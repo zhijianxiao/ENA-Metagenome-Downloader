@@ -12,6 +12,7 @@
 - **进度显示** — 终端实时显示每个文件的下载进度条
 - **结构化输出** — 每个项目独立目录，每个 run 独立子目录，清晰管理
 - **完整日志** — 输出同时写入日志文件，便于事后排查
+- **Screen 后台运行** — 通过 `run_in_screen.sh` 将下载任务放入后台 screen 会话，断连不中断
 
 ## 环境要求
 
@@ -19,16 +20,17 @@
 | ---- | ---- |
 | `curl` | 查询 ENA API |
 | `wget` | 下载 FASTQ 文件（支持断点续传） |
+| `screen` | 后台运行（仅 `run_in_screen.sh` 需要） |
 | Bash | Linux / macOS / WSL |
 
 安装依赖：
 
 ```bash
 # Ubuntu / Debian
-sudo apt install curl wget
+sudo apt install curl wget screen
 
 # macOS
-brew install curl wget
+brew install curl wget screen
 ```
 
 ## 安装教程
@@ -36,13 +38,36 @@ brew install curl wget
 ```bash
 git clone https://github.com/zhijianxiao/sra-download-skill.git
 cd sra-download-skill
-chmod +x download_ena.sh
+chmod +x download_ena.sh run_in_screen.sh
 ```
 
 ## 使用方法
 
+### 前台运行
+
 ```bash
 bash download_ena.sh <PROJECT_ID>
+```
+
+### Screen 后台运行
+
+```bash
+bash run_in_screen.sh <ACCESSION>
+```
+
+适合长时间下载或 SSH 连接不稳定的场景。`run_in_screen.sh` 自动完成：
+
+1. 检测 `screen` 是否安装
+2. 创建名为 accession 的 screen 会话
+3. 后台调用 `download_ena.sh`
+4. 打印 `screen -r` 恢复命令
+
+常用命令：
+
+```bash
+screen -r PRJNA210709    # 恢复会话，查看实时进度
+screen -list             # 列出所有会话
+screen -S PRJNA210709 -X quit  # 手动终止
 ```
 
 | 参数 | 说明 | 示例 |
@@ -76,6 +101,8 @@ bash download_ena.sh <PROJECT_ID>
 - **Single-end**：每个 run 目录下包含一个 `.fastq.gz` 文件
 
 ## 示例运行
+
+### 前台
 
 ```bash
 $ bash download_ena.sh PRJNA210709
@@ -115,4 +142,20 @@ $ bash download_ena.sh PRJNA210709
   Log:     .../logs/download.log
   List:    .../PRJNA210709.download_list.tsv
 ============================================================
+```
+
+### Screen 后台
+
+```bash
+$ bash run_in_screen.sh PRJNA210709
+
+[INFO] Launching screen session: PRJNA210709
+[INFO] Script:  /path/to/download_ena.sh PRJNA210709
+[OK] Screen session 'PRJNA210709' is running.
+
+  Reattach:  screen -r PRJNA210709
+  List:      screen -list
+  Kill:      screen -S PRJNA210709 -X quit
+
+$ screen -r PRJNA210709    # 恢复查看下载进度
 ```
