@@ -9,14 +9,17 @@ git clone https://github.com/zhijianxiao/sra-download-skill.git
 cd sra-download-skill
 chmod +x download_sra.sh
 
-# 下载整个项目
-bash download_sra.sh PRJNA1074950 --output-dir /mnt/hdd2/cxj-download/metagenome
+# 下载整个项目（指定目录）
+bash download_sra.sh PRJNA1074950 /mnt/hdd2/cxj-download/metagenome
 
-# 下载单个 SRR
-bash download_sra.sh SRR11066123 --output-dir ./data
+# 下载单个 SRR（指定目录）
+bash download_sra.sh SRR11066123 /home/user/data
+
+# 默认当前目录
+bash download_sra.sh PRJNA1074950
 
 # 后台运行（screen）
-bash download_sra.sh PRJNA1074950 --output-dir /mnt/hdd2/cxj-download/metagenome --background
+bash download_sra.sh PRJNA1074950 /mnt/hdd2/cxj-download/metagenome --background
 screen -r PRJNA1074950  # 查看进度
 ```
 
@@ -29,16 +32,16 @@ screen -r PRJNA1074950  # 查看进度
 ### 用法
 
 ```bash
-bash download_sra.sh <ACCESSION> [OPTIONS]
+bash download_sra.sh <ACCESSION> [OUTPUT_DIR] [OPTIONS]
 ```
 
 | 参数 | 说明 |
 |------|------|
 | `ACCESSION` | PRJNA / PRJEB（项目）或 SRR / ERR / DRR（单个 Run） |
+| `OUTPUT_DIR` | 下载目录（可选，默认当前目录） |
 
 | 选项 | 说明 |
 |------|------|
-| `--output-dir DIR` | 下载目录（默认 `./output`） |
 | `--show-progress` | 强制显示 wget 进度条（终端下默认自动开启） |
 | `--background` | 在 screen 会话中后台运行，session 名 = ACCESSION |
 | `-h, --help` | 显示帮助 |
