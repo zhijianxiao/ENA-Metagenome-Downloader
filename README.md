@@ -1,132 +1,111 @@
 # ENA Metagenome Downloader
 
-通过 ENA Portal API 批量下载指定项目（PRJNA / PRJEB）或单个 Run（SRR / ERR / DRR）的 FASTQ 文件。
+通过 ENA Portal API 下载 FASTQ 文件。**下载默认在 screen 后台运行**，退出终端也不会中断。
 
-## 快速开始
+## 快速安装
 
 ```bash
 git clone https://github.com/zhijianxiao/sra-download-skill.git
 cd sra-download-skill
 chmod +x download_sra.sh
 
-# 下载整个项目（指定目录）
-bash download_sra.sh PRJNA1074950 /home/user/downloads
-
-# 下载单个 SRR（指定目录）
-bash download_sra.sh SRR11066123 /home/user/data
-
-# 默认当前目录（不指定 OUTPUT_DIR）
-bash download_sra.sh PRJNA1074950
-
-# 后台运行（screen）
-bash download_sra.sh PRJNA1074950 /home/user/downloads --background
-screen -r PRJNA1074950  # 查看进度
+# 安装依赖（Ubuntu / Debian）
+sudo apt install curl wget screen
 ```
 
----
+## 常用命令
 
-## download_sra.sh（推荐）
+| 场景 | 命令 |
+|------|------|
+| 下载单个 SRR | `bash download_sra.sh SRR11066123` |
+| 下载整个项目 | `bash download_sra.sh PRJNA1074950` |
+| 指定下载目录 | `bash download_sra.sh PRJNA1074950 /home/user/data` |
+| 从 txt 列表批量下载 | `bash download_sra.sh --file my_list.txt /home/user/data` |
+| 前台运行（不用 screen） | `bash download_sra.sh SRR11066123 --foreground` |
 
-统一的下载脚本，支持项目级和单 Run 级下载。
+## 使用示例
 
-### 用法
+### 1. 下载单个 Run
 
 ```bash
-bash download_sra.sh <ACCESSION> [OUTPUT_DIR] [OPTIONS]
+bash download_sra.sh SRR11066123
 ```
 
-| 参数 | 说明 |
-|------|------|
-| `ACCESSION` | PRJNA / PRJEB（项目）或 SRR / ERR / DRR（单个 Run） |
-| `OUTPUT_DIR` | 下载目录（可选，默认当前目录） |
+### 2. 下载整个 BioProject（PRJNA / PRJEB）
 
-| 选项 | 说明 |
-|------|------|
-| `--show-progress` | 强制显示 wget 进度条（终端下默认自动开启） |
-| `--background` | 在 screen 会话中后台运行，session 名 = ACCESSION |
-| `-h, --help` | 显示帮助 |
+```bash
+bash download_sra.sh PRJNA1074950 /home/user/downloads
+```
 
-### 功能特点
+自动解析项目下所有 SRR / ERR / DRR 并下载。
 
-- **项目 + 单 Run** — 自动识别输入类型，PRJNA 解析全部 SRR / ERR
-- **ENA 直链下载** — 无需 SRA Toolkit，直接下载 `.fastq.gz`
-- **断点续传** — `wget -c` 支持中断恢复，已存在文件自动跳过
-- **自动重试** — 下载失败自动重试 3 次，间隔 5 秒
-- **实时进度** — 终端显示 wget 进度条（文件名、大小、速度、ETA）
-- **日志记录** — 每个项目目录下生成 `download.log`，记录开始/结束时间、每个 SRR 状态、文件大小、错误信息
-- **Screen 后台运行** — `--background` 一键启动后台下载，断连不中断
-- **自动创建目录** — `mkdir -p` 自动创建输出目录和项目子目录
+### 3. 从本地 txt 列表批量下载
 
-### 输出结构
+创建 `my_list.txt`，每行一个 accession：
 
 ```
-<output-dir>/
+# 我的下载列表
+SRR11066123
+SRR11066124
+ERR1234567
+```
+
+```bash
+bash download_sra.sh --file my_list.txt /home/user/data
+```
+
+### 4. 前台运行（调试用）
+
+```bash
+bash download_sra.sh SRR11066123 --foreground
+```
+
+## 查看下载进度 & 日志
+
+| 操作 | 命令 |
+|------|------|
+| 查看所有 screen 会话 | `screen -list` |
+| 进入会话看实时进度 | `screen -r PRJNA1074950` |
+| 退出会话（不中断下载） | 按 `Ctrl+A` 再按 `D` |
+| 实时查看日志 | `tail -f PRJNA1074950/download.log` |
+| 停止下载 | `screen -S PRJNA1074950 -X quit` |
+
+## 输出结构
+
+```
+/home/user/downloads/
 └── PRJNA1074950/
     ├── SRR11066123_1.fastq.gz
     ├── SRR11066123_2.fastq.gz
     ├── SRR11066124.fastq.gz
+    ├── ...
     └── download.log
 ```
 
-- 文件直接存放在项目目录下，无嵌套子目录
-- 仅保留 `.fastq.gz` 文件和 `download.log`，不保留中间文件
+## 参数说明
 
-### 日志格式
-
-```log
-============================================================
-Download Started:  2026-05-11 14:30:00
-Accession:         PRJNA1074950
-Accession Type:    project
-Output Directory:  /home/user/downloads/PRJNA1074950
-============================================================
-
-[1/2] SRR11066123 (PAIRED) — START
-  [OK] SRR11066123_1.fastq.gz — 2.3GB (00:05:21)
-  [OK] SRR11066123_2.fastq.gz — 2.1GB (00:04:58)
-[1/2] SRR11066123 — DONE (00:10:19)
-
-============================================================
-Download Finished: 2026-05-11 14:40:19
-Elapsed:           00:10:19
-Success:           2/2
-============================================================
+```
+bash download_sra.sh <ACCESSION> [OUTPUT_DIR] [OPTIONS]
+bash download_sra.sh --file <LIST.txt> [OUTPUT_DIR] [OPTIONS]
 ```
 
-### 环境要求
-
-| 依赖 | 说明 |
+| 参数 | 说明 |
 |------|------|
-| `curl` | 查询 ENA API |
-| `wget` | 下载 FASTQ 文件（支持断点续传和进度条） |
-| `screen` | 后台运行（仅 `--background` 时需要） |
-| Bash 4.0+ | Linux / WSL |
+| `ACCESSION` | PRJNA / PRJEB / SRR / ERR / DRR ... |
+| `OUTPUT_DIR` | 下载目录（可选，默认当前目录） |
 
-```bash
-# Ubuntu / Debian
-sudo apt install curl wget screen
-```
+| 选项 | 说明 |
+|------|------|
+| `--file FILE` | 从本地 txt 读取 accession 列表（每行一个，# 开头为注释） |
+| `--foreground` | 前台运行，不创建 screen 会话 |
+| `--show-progress` | 强制显示进度条（终端下默认自动） |
+| `-h, --help` | 显示帮助 |
 
----
+## 功能特点
 
-## download_ena.sh（旧版，保留兼容）
-
-仅支持项目级下载，输出目录硬编码为 `/mnt/hdd2/cxj-download/metagenome`。
-
-```bash
-bash download_ena.sh <PROJECT_ID>
-```
-
-## run_in_screen.sh（旧版，保留兼容）
-
-```bash
-bash run_in_screen.sh <ACCESSION>
-```
-
-常用 screen 命令：
-
-```bash
-screen -r PRJNA210709         # 恢复会话，查看实时进度
-screen -list                  # 列出所有会话
-screen -S PRJNA210709 -X quit # 手动终止
-```
+- **默认后台运行** — 自动创建 screen 会话，断开 SSH 不中断
+- **断点续传** — `wget -c` 支持中断恢复，已下载文件自动跳过
+- **自动重试** — 下载失败自动重试 3 次
+- **批量下载** — 支持 txt 列表一次性提交多个 accession
+- **日志完整** — 每个任务独立 `download.log`，记录耗时、大小、状态
+- **无需 SRA Toolkit** — 直接下载 `.fastq.gz`

@@ -2,22 +2,27 @@
 # ============================================================
 # download_sra.sh — ENA FASTQ Downloader
 #
+# Downloads run in screen by default (survives terminal disconnect).
+# Use --foreground to run directly in the current terminal.
+#
 # Usage:
 #   bash download_sra.sh <ACCESSION> [OUTPUT_DIR] [OPTIONS]
+#   bash download_sra.sh --file <LIST.txt> [OUTPUT_DIR] [OPTIONS]
 #
 #   ACCESSION   PRJNA/PRJEB/PRJDB... (project) or SRR/ERR/DRR... (run)
 #   OUTPUT_DIR  Download directory (default: current directory)
 #
 # Options:
-#   --show-progress     Show wget progress bar (auto-detected if TTY)
-#   --background         Launch in screen session, named after ACCESSION
-#   -h, --help          Show this help
+#   --file FILE          Read accessions from local txt file (one per line)
+#   --foreground         Run in foreground (no screen session)
+#   --show-progress      Force wget progress bar (auto-detected if TTY)
+#   -h, --help           Show this help
 #
 # Examples:
-#   bash download_sra.sh PRJNA1074950 /mnt/hdd2/metagenome
-#   bash download_sra.sh SRR11066123 /home/user/data
-#   bash download_sra.sh PRJNA1074950 /mnt/hdd2/metagenome --background
-#   bash download_sra.sh PRJNA1074950  # defaults to current directory
+#   bash download_sra.sh PRJNA1074950 /home/user/downloads
+#   bash download_sra.sh SRR11066123
+#   bash download_sra.sh --file my_accessions.txt /home/user/data
+#   bash download_sra.sh PRJNA1074950 --foreground
 # ============================================================
 
 set -u
@@ -271,21 +276,34 @@ download_runs() {
 main() {
     # ---- parse args ----
     # Positional:  $1=ACCESSION  $2=OUTPUT_DIR (optional, defaults to .)
-    # Options:     --show-progress  --background  --help
+    # Options:     --file  --foreground  --show-progress  --help
     ACCESSION=""
     OUTPUT_DIR="."
     SHOW_PROGRESS=false
-    BACKGROUND=false
+    FOREGROUND=false
+    BATCH_FILE=""
     local positional_count=0
 
     while [ $# -gt 0 ]; do
         case "$1" in
+            --file)
+                if [ -z "${2:-}" ]; then
+                    echo "[ERROR] --file requires a file path"
+                    exit 1
+                fi
+                BATCH_FILE="$2"
+                shift 2
+                ;;
+            --foreground)
+                FOREGROUND=true
+                shift
+                ;;
             --show-progress)
                 SHOW_PROGRESS=true
                 shift
                 ;;
             --background)
-                BACKGROUND=true
+                # backwards-compat: screen is now the default, this is a no-op
                 shift
                 ;;
             --help|-h)
@@ -298,7 +316,6 @@ main() {
                 exit 1
                 ;;
             *)
-                # First non-option arg = ACCESSION, second = OUTPUT_DIR
                 positional_count=$((positional_count + 1))
                 case $positional_count in
                     1) ACCESSION="$1" ;;
@@ -310,63 +327,119 @@ main() {
         esac
     done
 
+    # ---- save original positional ACCESSION (before file merge) ----
+    ACCESSION_ORIGINAL="$ACCESSION"
+
+    # ---- resolve ACCESSION from --file ----
+    if [ -n "$BATCH_FILE" ]; then
+        if [ ! -f "$BATCH_FILE" ]; then
+            echo "[ERROR] File not found: $BATCH_FILE"
+            exit 1
+        fi
+        # Read file, strip comments and blank lines, join with commas
+        local file_accessions
+        file_accessions=$(grep -v '^[[:space:]]*#' "$BATCH_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ',' | sed 's/,$//')
+        if [ -z "$file_accessions" ]; then
+            echo "[ERROR] No accessions found in: $BATCH_FILE"
+            exit 1
+        fi
+        if [ -n "$ACCESSION" ]; then
+            ACCESSION="${ACCESSION},${file_accessions}"
+        else
+            ACCESSION="$file_accessions"
+        fi
+        # Derive screen name from filename
+        local batch_name
+        batch_name=$(basename "$BATCH_FILE" | sed 's/\.[^.]*$//')
+        SCREEN_NAME="${batch_name}"
+    fi
+
     if [ -z "$ACCESSION" ]; then
-        echo "[ERROR] ACCESSION is required"
+        echo "[ERROR] ACCESSION is required (or use --file)"
         show_help
         exit 1
     fi
 
+    # ---- screen session name ----
+    if [ -z "${SCREEN_NAME:-}" ]; then
+        SCREEN_NAME="$ACCESSION"
+        # Sanitize: replace commas for batch downloads, keep it short
+        SCREEN_NAME="${SCREEN_NAME//,/_}"
+    fi
+
     # ---- detect accession type ----
-    if [[ "$ACCESSION" =~ ^(PRJ|ERP|SRP|DRP) ]]; then
+    # For batch mode, check the first accession
+    local first_acc
+    first_acc="${ACCESSION%%,*}"
+    if [[ "$first_acc" =~ ^(PRJ|ERP|SRP|DRP) ]]; then
         MODE="project"
-    elif [[ "$ACCESSION" =~ ^(SRR|ERR|DRR|SRX|ERX|DRX) ]]; then
+    elif [[ "$first_acc" =~ ^(SRR|ERR|DRR|SRX|ERX|DRX) ]]; then
         MODE="run"
     else
-        echo "[ERROR] Unrecognized accession format: ${ACCESSION}"
+        echo "[ERROR] Unrecognized accession format: ${first_acc}"
         echo "  Expected: PRJNA..., PRJEB..., SRR..., ERR..., DRR..., etc."
         exit 1
     fi
 
     # ---- setup directories ----
-    PROJECT_DIR="${OUTPUT_DIR%/}/${ACCESSION}"
+    PROJECT_DIR="${OUTPUT_DIR%/}/${SCREEN_NAME}"
     mkdir -p "$PROJECT_DIR"
     LOG_FILE="${PROJECT_DIR}/download.log"
     START_TIME=$(date +%s)
     START_DATE=$(date '+%Y-%m-%d %H:%M:%S')
 
-    # ---- handle background mode ----
-    if [ "$BACKGROUND" = true ]; then
+    # ---- decide: screen (default) or foreground ----
+    local use_screen=false
+    if [ "$FOREGROUND" = true ]; then
+        use_screen=false
+    elif [ -n "${STY:-}" ]; then
+        # Already inside a screen session, don't nest
+        use_screen=false
+    elif [ ! -t 0 ]; then
+        # No TTY (cron, pipeline), run in foreground
+        use_screen=false
+    elif ! command -v screen &>/dev/null; then
+        # screen not installed
+        use_screen=false
+    else
+        use_screen=true
+    fi
+
+    # ---- handle screen mode ----
+    if [ "$use_screen" = true ]; then
         check_deps
 
-        if ! command -v screen &>/dev/null; then
-            echo "[ERROR] 'screen' is required for background mode"
-            echo "  Install: sudo apt install screen"
-            exit 1
-        fi
-
         # kill existing session with same name
-        screen -S "$ACCESSION" -X quit 2>/dev/null || true
+        screen -S "$SCREEN_NAME" -X quit 2>/dev/null || true
 
         local script_dir
         script_dir="$(cd "$(dirname "$0")" && pwd)"
         local script_path="${script_dir}/download_sra.sh"
 
         # Reconstruct command from parsed variables
-        local cmd="bash '${script_path}' '${ACCESSION}' '${OUTPUT_DIR}'"
+        local cmd="bash '${script_path}'"
+        if [ -n "$BATCH_FILE" ]; then
+            cmd+=" --file '${BATCH_FILE}'"
+        fi
+        if [ -n "$ACCESSION_ORIGINAL" ]; then
+            cmd+=" '${ACCESSION_ORIGINAL}'"
+        fi
+        cmd+=" '${OUTPUT_DIR}'"
         if [ "$SHOW_PROGRESS" = true ]; then
             cmd+=" --show-progress"
         fi
+        cmd+=" --foreground"
 
-        echo "[INFO] Launching screen session: ${ACCESSION}"
+        echo "[INFO] Launching screen session: ${SCREEN_NAME}"
         echo "[INFO] Command: ${cmd}"
         echo ""
 
-        screen -dmS "$ACCESSION" bash -c "
+        screen -dmS "$SCREEN_NAME" bash -c "
             echo '============================================================'
-            echo ' Screen Session: ${ACCESSION}'
+            echo ' Screen Session: ${SCREEN_NAME}'
             echo ' Host:           \$(hostname)'
             echo ' Start:          \$(date '+%Y-%m-%d %H:%M:%S')'
-            echo ' Log:            ${LOG_FILE}'
+            echo ' Log:            ${OUTPUT_DIR%/}/${SCREEN_NAME}/download.log'
             echo '============================================================'
             echo ''
             ${cmd}
@@ -375,7 +448,7 @@ main() {
             echo '============================================================'
             echo ' Exit code:      \${EXIT_CODE}'
             echo ' Finished:       \$(date '+%Y-%m-%d %H:%M:%S')'
-            echo ' Log:            ${LOG_FILE}'
+            echo ' Log:            ${OUTPUT_DIR%/}/${SCREEN_NAME}/download.log'
             echo '============================================================'
             echo ''
             echo 'Press Enter to close this screen session.'
@@ -384,22 +457,22 @@ main() {
 
         sleep 1
 
-        if screen -list 2>/dev/null | grep -q "\.${ACCESSION}"; then
-            echo "[OK] Screen session '${ACCESSION}' is running."
+        if screen -list 2>/dev/null | grep -q "\.${SCREEN_NAME}"; then
+            echo "[OK] Screen session '${SCREEN_NAME}' is running."
             echo ""
-            echo "  Reattach:  screen -r ${ACCESSION}"
+            echo "  Reattach:  screen -r ${SCREEN_NAME}"
             echo "  List:      screen -list"
-            echo "  Kill:      screen -S ${ACCESSION} -X quit"
-            echo "  Log:       ${LOG_FILE}"
+            echo "  Kill:      screen -S ${SCREEN_NAME} -X quit"
+            echo "  Log:       ${OUTPUT_DIR%/}/${SCREEN_NAME}/download.log"
         else
             echo "[WARN] Screen session may have exited immediately."
-            echo "  Check log: ${LOG_FILE}"
+            echo "  Check log: ${OUTPUT_DIR%/}/${SCREEN_NAME}/download.log"
         fi
 
         exit 0
     fi
 
-    # ---- foreground execution ----
+    # ---- foreground execution (--foreground, or inside screen, or no TTY) ----
     check_deps
 
     # ---- write log header ----
@@ -407,7 +480,9 @@ main() {
         echo "============================================================"
         echo "Download Started:  ${START_DATE}"
         echo "Accession:         ${ACCESSION}"
-        echo "Accession Type:    ${MODE}"
+        if [ -n "$BATCH_FILE" ]; then
+            echo "Batch File:        ${BATCH_FILE}"
+        fi
         echo "Output Directory:  ${PROJECT_DIR}"
         echo "============================================================"
         echo ""
